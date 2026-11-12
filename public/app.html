@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DevDesk — Gerenciador de Chamados de TI</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --txt:#e2e8f0; --mute:#94a3b8; --acc:#38bdf8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:20px 24px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+  h1 { margin:0; font-size:1.3rem; } h1 span { color:var(--acc); }
+  main { max-width:1100px; margin:0 auto; padding:24px; display:grid; gap:20px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+  .card, form, .tablewrap { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .card b { display:block; font-size:1.8rem; color:var(--acc); } .card small { color:var(--mute); text-transform:capitalize; }
+  form { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }
+  form .wide { grid-column:1/-1; }
+  input, select, textarea, button { font:inherit; padding:9px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--txt); }
+  button { background:var(--acc); color:#0f172a; font-weight:600; cursor:pointer; border:0; }
+  button.small { padding:4px 8px; font-size:.8rem; }
+  .filters { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+  .tablewrap { overflow-x:auto; } table { width:100%; border-collapse:collapse; min-width:720px; }
+  th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); font-size:.9rem; } th { color:var(--mute); font-weight:500; }
+  .tag { padding:2px 8px; border-radius:999px; font-size:.75rem; background:var(--bg); border:1px solid var(--line); }
+  .critica { color:#f87171; border-color:#f87171; } .alta { color:#fb923c; border-color:#fb923c; }
+  #msg { min-height:1.2em; color:#fbbf24; }
+</style>
+</head>
+<body>
+<header><h1>Dev<span>Desk</span> · Chamados de TI</h1><div id="msg"></div></header>
+<main>
+  <section class="cards" id="stats"></section>
+
+  <form id="form">
+    <input name="title" placeholder="Título do problema" required maxlength="120" class="wide">
+    <select name="category"><option value="rede">Rede</option><option value="hardware">Hardware</option><option value="software">Software</option><option value="acesso">Acesso</option></select>
+    <select name="priority"><option value="baixa">Baixa</option><option value="media" selected>Média</option><option value="alta">Alta</option><option value="critica">Crítica</option></select>
+    <input name="requester_email" type="email" placeholder="E-mail do solicitante" required>
+    <textarea name="description" placeholder="Descrição (opcional)" class="wide" rows="2"></textarea>
+    <button class="wide">Abrir chamado</button>
+  </form>
+
+  <section class="tablewrap">
+    <div class="filters">
+      <select id="fStatus"><option value="">Todos os status</option><option value="aberto">Aberto</option><option value="em_andamento">Em andamento</option><option value="resolvido">Resolvido</option><option value="fechado">Fechado</option></select>
+      <select id="fPrio"><option value="">Todas as prioridades</option><option value="critica">Crítica</option><option value="alta">Alta</option><option value="media">Média</option><option value="baixa">Baixa</option></select>
+    </div>
+    <table><thead><tr><th>Código</th><th>Título</th><th>Categoria</th><th>Prioridade</th><th>SLA</th><th>Status</th><th>Ação</th></tr></thead><tbody id="rows"></tbody></table>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const NEXT = { aberto:['em_andamento'], em_andamento:['resolvido'], resolvido:['fechado'], fechado:[] };
+const label = (s) => s.replace('_', ' ');
+
+// Escapa HTML para evitar XSS ao renderizar dados vindos do usuário
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: {'Content-Type':'application/json'}, ...opts });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Erro inesperado');
+  return data;
+}
+
+async function load() {
+  const qs = new URLSearchParams();
+  if ($('#fStatus').value) qs.set('status', $('#fStatus').value);
+  if ($('#fPrio').value) qs.set('priority', $('#fPrio').value);
+  const [tickets, stats] = await Promise.all([api('/api/tickets?' + qs), api('/api/stats')]);
+
+  $('#stats').innerHTML = Object.entries(stats.por_status)
+    .map(([k, v]) => `<div class="card"><b>${v}</b><small>${esc(label(k))}</small></div>`).join('') || '<div class="card"><small>Nenhum chamado ainda</small></div>';
+
+  $('#rows').innerHTML = tickets.map((t) => `
+    <tr>
+      <td>${esc(t.code)}</td><td>${esc(t.title)}</td><td>${esc(t.category)}</td>
+      <td><span class="tag ${esc(t.priority)}">${esc(t.priority)}</span></td>
+      <td>${t.sla_hours}h</td><td>${esc(label(t.status))}</td>
+      <td>${NEXT[t.status].map((n) => `<button class="small" data-id="${t.id}" data-next="${n}">→ ${esc(label(n))}</button>`).join('')}</td>
+    </tr>`).join('');
+}
+
+function flash(text) { $('#msg').textContent = text; setTimeout(() => $('#msg').textContent = '', 4000); }
+
+$('#form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/tickets', { method:'POST', body: JSON.stringify(Object.fromEntries(new FormData(e.target))) });
+    e.target.reset(); flash('Chamado aberto!'); load();
+  } catch (err) { flash(err.message); }
+});
+
+$('#rows').addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  try { await api(`/api/tickets/${b.dataset.id}/status`, { method:'PATCH', body: JSON.stringify({ status: b.dataset.next }) }); load(); }
+  catch (err) { flash(err.message); }
+});
+
+$('#fStatus').addEventListener('change', load);
+$('#fPrio').addEventListener('change', load);
+load();
+</script>
+</body>
+</html>
